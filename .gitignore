@@ -159,4 +159,4 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 dialogue-summary-training-*
-peft-dialogue-summary-checkpoint-local
+peft-dialogue-summary-*

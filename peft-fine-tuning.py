@@ -6,15 +6,9 @@ import evaluate
 import pandas as pd
 import numpy as np
 
-# Load the dataset
-huggingface_dataset_name = "knkarthick/dialogsum"
-dataset = load_dataset(huggingface_dataset_name)
-# dataset
-
-# Load the model and tokenizer
-model_name='google/flan-t5-base'
-original_model = AutoModelForSeq2SeqLM.from_pretrained(model_name, torch_dtype=torch.bfloat16)
-tokenizer = AutoTokenizer.from_pretrained(model_name)
+# Common things
+dash_line = '-'.join('' for x in range(100))
+equal_line = '='.join('' for x in range(100))
 
 def print_number_of_trainable_model_parameters(model):
     trainable_model_params = 0
@@ -23,13 +17,37 @@ def print_number_of_trainable_model_parameters(model):
         all_model_params += param.numel()
         if param.requires_grad:
             trainable_model_params += param.numel()
-    return f"trainable model parameters: {trainable_model_params}\nall model parameters: {all_model_params}\npercentage of trainable model parameters: {100 * trainable_model_params / all_model_params:.2f}%"
+    return f"=> {trainable_model_params} ({100 * trainable_model_params / all_model_params:.2f}%) of {all_model_params}"
 
+def tokenize_function(example):
+    start_prompt = 'Summarize the following conversation.\n\n'
+    end_prompt = '\n\nSummary: '
+    prompt = [start_prompt + dialogue + end_prompt for dialogue in example["dialogue"]]
+    example['input_ids'] = tokenizer(prompt, padding="max_length", truncation=True, return_tensors="pt").input_ids
+    example['labels'] = tokenizer(example["summary"], padding="max_length", truncation=True, return_tensors="pt").input_ids
+    
+    return example
+
+# Load the dataset
+huggingface_dataset_name = "knkarthick/dialogsum"
+print(f"\nLoading dataset {huggingface_dataset_name}...")
+print(equal_line)
+dataset = load_dataset(huggingface_dataset_name)
+
+# Load the model and tokenizer
+print("\nLoading model and tokenizer...")
+print(equal_line)
+model_name='google/flan-t5-base'
+original_model = AutoModelForSeq2SeqLM.from_pretrained(model_name, torch_dtype=torch.bfloat16)
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+print("Number of trainable model parameters in original model:")
 print(print_number_of_trainable_model_parameters(original_model))
 
-# Before full fine-tuning, let's look at zero-shot performance
-index = 200
-
+# Before fine-tuning, let's look at zero-shot performance
+index = 200 # Example we chose to look at
+print(f"\nZero-shot performance before fine-tuning for {index}th row:")
+print(equal_line)
 dialogue = dataset['test'][index]['dialogue']
 summary = dataset['test'][index]['summary']
 
@@ -50,37 +68,39 @@ output = tokenizer.decode(
     skip_special_tokens=True
 )
 
-dash_line = '-'.join('' for x in range(100))
-print(dash_line)
 print(f'INPUT PROMPT:\n{prompt}')
 print(dash_line)
 print(f'BASELINE HUMAN SUMMARY:\n{summary}\n')
 print(dash_line)
 print(f'MODEL GENERATION - ZERO SHOT:\n{output}')
 
-
-def tokenize_function(example):
-    start_prompt = 'Summarize the following conversation.\n\n'
-    end_prompt = '\n\nSummary: '
-    prompt = [start_prompt + dialogue + end_prompt for dialogue in example["dialogue"]]
-    example['input_ids'] = tokenizer(prompt, padding="max_length", truncation=True, return_tensors="pt").input_ids
-    example['labels'] = tokenizer(example["summary"], padding="max_length", truncation=True, return_tensors="pt").input_ids
-    
-    return example
-
+print("\nDataset tokenization and batching...")
+print(equal_line)
 # The dataset actually contains 3 diff splits: train, validation, test.
 # The tokenize_function code is handling all data across all splits in batches.
 tokenized_datasets = dataset.map(tokenize_function, batched=True)
 tokenized_datasets = tokenized_datasets.remove_columns(['id', 'topic', 'dialogue', 'summary',])
-
-# To optimize, we will load a subset of the data
 tokenized_datasets = tokenized_datasets.filter(lambda example, index: index % 100 == 0, with_indices=True)
 
 print(f"Shapes of the datasets:")
 print(f"Training: {tokenized_datasets['train'].shape}")
 print(f"Validation: {tokenized_datasets['validation'].shape}")
 print(f"Test: {tokenized_datasets['test'].shape}")
-print(tokenized_datasets)
+# print(tokenized_datasets)
+
+# Fine-tuning the model if you have a cached version
+print("\nFine-tuning the model with PEFT...")
+print(equal_line)
+# from peft import PeftModel, PeftConfig
+
+# peft_model_base = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base", torch_dtype=torch.bfloat16)
+# tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base")
+
+# peft_model = PeftModel.from_pretrained(peft_model_base, 
+#                                        './peft-dialogue-summary-checkpoint-from-s3/', 
+#                                        torch_dtype=torch.bfloat16,
+#                                        is_trainable=False)
+# print("Number of trainable model parameters in trained PEFT model:")
 
 # Define the model PEFT config
 from peft import LoraConfig, get_peft_model, TaskType
@@ -94,8 +114,7 @@ lora_config = LoraConfig(
     task_type=TaskType.SEQ_2_SEQ_LM # FLAN-T5
 )
 
-peft_model = get_peft_model(original_model, 
-                            lora_config)
+peft_model = get_peft_model(original_model, lora_config)
 print(print_number_of_trainable_model_parameters(peft_model))
 
 # Define the training arguments
@@ -116,18 +135,18 @@ peft_trainer = Trainer(
     train_dataset=tokenized_datasets["train"],
 )
 
-# Uncomment below when you have a powerful GPU in a server environment. 
+# PEFT is relatively faster. Based on the model size, you choose to train and save it offline
 # Otherwise, it will take days or may not even complete on a small laptop.
 peft_trainer.train()
-
 peft_model_path="./peft-dialogue-summary-checkpoint-local"
-
-peft_trainer.model.save_pretrained(peft_model_path)
+peft_trainer.model.save_pretrained(peft_model_path) # Cache it if you want to use it later.
 tokenizer.save_pretrained(peft_model_path)
+
 print(print_number_of_trainable_model_parameters(peft_model))
 
 #Evaluate the model qualitatively
-index = 200
+print("\nEvaluating the model qualitatively...")
+print(equal_line)
 dialogue = dataset['test'][index]['dialogue']
 baseline_human_summary = dataset['test'][index]['summary']
 
@@ -143,27 +162,19 @@ input_ids = tokenizer(prompt, return_tensors="pt").input_ids
 original_model_outputs = original_model.generate(input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200, num_beams=1))
 original_model_text_output = tokenizer.decode(original_model_outputs[0], skip_special_tokens=True)
 
-instruct_model_outputs = instruct_model.generate(input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200, num_beams=1))
-instruct_model_text_output = tokenizer.decode(instruct_model_outputs[0], skip_special_tokens=True)
-
 peft_model_outputs = peft_model.generate(input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200, num_beams=1))
 peft_model_text_output = tokenizer.decode(peft_model_outputs[0], skip_special_tokens=True)
 
-print(dash_line)
-print(f'BASELINE HUMAN SUMMARY:\n{human_baseline_summary}')
-print(dash_line)
-print(f'ORIGINAL MODEL:\n{original_model_text_output}')
-print(dash_line)
-print(f'INSTRUCT MODEL:\n{instruct_model_text_output}')
-print(dash_line)
 print(f'PEFT MODEL: {peft_model_text_output}')
 
 # Evaluate the model quantitatively
-dialogues = dataset['test'][0:10]['dialogue']
-human_baseline_summaries = dataset['test'][0:10]['summary']
+total = 3
+print("\nEvaluating the model quantitatively using ROUGE...")
+print(equal_line)
+dialogues = dataset['test'][0:total]['dialogue']
+human_baseline_summaries = dataset['test'][0:total]['summary']
 
 original_model_summaries = []
-instruct_model_summaries = []
 peft_model_summaries = []
 
 for idx, dialogue in enumerate(dialogues):
@@ -174,29 +185,30 @@ Summarize the following conversation.
 
 Summary: """
     
+    print(f"Generating summary for row {idx}...")
     input_ids = tokenizer(prompt, return_tensors="pt").input_ids
-
     human_baseline_text_output = human_baseline_summaries[idx]
     
     original_model_outputs = original_model.generate(input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200))
     original_model_text_output = tokenizer.decode(original_model_outputs[0], skip_special_tokens=True)
 
-    instruct_model_outputs = instruct_model.generate(input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200))
-    instruct_model_text_output = tokenizer.decode(instruct_model_outputs[0], skip_special_tokens=True)
-
     peft_model_outputs = peft_model.generate(input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200))
     peft_model_text_output = tokenizer.decode(peft_model_outputs[0], skip_special_tokens=True)
 
     original_model_summaries.append(original_model_text_output)
-    instruct_model_summaries.append(instruct_model_text_output)
     peft_model_summaries.append(peft_model_text_output)
 
-zipped_summaries = list(zip(human_baseline_summaries, original_model_summaries, instruct_model_summaries, peft_model_summaries))
- 
-df = pd.DataFrame(zipped_summaries, columns = ['human_baseline_summaries', 'original_model_summaries', 'instruct_model_summaries', 'peft_model_summaries'])
-df
+zipped_summaries = list(zip(human_baseline_summaries, original_model_summaries, peft_model_summaries))
 
+print("\nComparing human vs original vs peft model summaries...\n")
+df = pd.DataFrame(zipped_summaries, columns = ['human_baseline_summaries', 'original_model_summaries', 'peft_model_summaries'])
+print(df)
+
+
+print("\nEvaluating the model quantitatively using ROUGE...")
+print(equal_line)
 rouge = evaluate.load('rouge')
+human_baseline_summaries = dataset['test'][0:total]['summary']
 
 original_model_results = rouge.compute(
     predictions=original_model_summaries,
@@ -218,6 +230,14 @@ print('PEFT MODEL:')
 print(peft_model_results)
 
 #check performance on the full test set
+print("\nEvaluating the model quantitatively using ROUGE on the full test set...")
+print(equal_line)
+results = pd.read_csv("data/dialogue-summary-training-results.csv")
+
+human_baseline_summaries = results['human_baseline_summaries'].values
+original_model_summaries = results['original_model_summaries'].values
+peft_model_summaries     = results['peft_model_summaries'].values
+
 human_baseline_summaries = results['human_baseline_summaries'].values
 original_model_summaries = results['original_model_summaries'].values
 instruct_model_summaries = results['instruct_model_summaries'].values
@@ -226,6 +246,13 @@ peft_model_summaries     = results['peft_model_summaries'].values
 original_model_results = rouge.compute(
     predictions=original_model_summaries,
     references=human_baseline_summaries[0:len(original_model_summaries)],
+    use_aggregator=True,
+    use_stemmer=True,
+)
+
+instruct_model_results = rouge.compute(
+    predictions=instruct_model_summaries,
+    references=human_baseline_summaries[0:len(instruct_model_summaries)],
     use_aggregator=True,
     use_stemmer=True,
 )
@@ -239,11 +266,21 @@ peft_model_results = rouge.compute(
 
 print('ORIGINAL MODEL:')
 print(original_model_results)
+print('INSTRUCT MODEL:')
+print(instruct_model_results)
 print('PEFT MODEL:')
 print(peft_model_results)
 
-print("Absolute percentage improvement of PEFT MODEL over ORIGINAL MODEL")
+print("\nAbsolute percentage improvement of PEFT MODEL over ORIGINAL MODEL")
+print(equal_line)
 
 improvement = (np.array(list(peft_model_results.values())) - np.array(list(original_model_results.values())))
+for key, value in zip(peft_model_results.keys(), improvement):
+    print(f'{key}: {value*100:.2f}%')
+
+print("\nAbsolute percentage improvement of PEFT MODEL over INSTRUCT MODEL")
+print(equal_line)
+
+improvement = (np.array(list(peft_model_results.values())) - np.array(list(instruct_model_results.values())))
 for key, value in zip(peft_model_results.keys(), improvement):
     print(f'{key}: {value*100:.2f}%')
