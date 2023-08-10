@@ -5,6 +5,7 @@ import time
 import evaluate
 import pandas as pd
 import numpy as np
+import datetime
 
 # Common things
 dash_line = '-'.join('' for x in range(100))
@@ -91,6 +92,11 @@ print(f"Test: {tokenized_datasets['test'].shape}")
 # Fine-tuning the model if you have a cached version
 print("\nFine-tuning the model with PEFT...")
 print(equal_line)
+
+now = datetime.datetime.now()
+print(f"Fine-tuning start tine : ")
+print(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
 # from peft import PeftModel, PeftConfig
 
 # peft_model_base = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base", torch_dtype=torch.bfloat16)
@@ -142,6 +148,9 @@ peft_model_path="./peft-dialogue-summary-checkpoint-local"
 peft_trainer.model.save_pretrained(peft_model_path) # Cache it if you want to use it later.
 tokenizer.save_pretrained(peft_model_path)
 
+print(f"Fine-tuning end tine : ")
+print(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
 print(print_number_of_trainable_model_parameters(peft_model))
 
 #Evaluate the model qualitatively
@@ -168,7 +177,7 @@ peft_model_text_output = tokenizer.decode(peft_model_outputs[0], skip_special_to
 print(f'PEFT MODEL: {peft_model_text_output}')
 
 # Evaluate the model quantitatively
-total = 3
+total = 10
 print("\nEvaluating the model quantitatively using ROUGE...")
 print(equal_line)
 dialogues = dataset['test'][0:total]['dialogue']
@@ -232,7 +241,7 @@ print(peft_model_results)
 #check performance on the full test set
 print("\nEvaluating the model quantitatively using ROUGE on the full test set...")
 print(equal_line)
-results = pd.read_csv("data/dialogue-summary-training-results.csv")
+results = pd.read_csv("data/ds-training-results.csv")
 
 human_baseline_summaries = results['human_baseline_summaries'].values
 original_model_summaries = results['original_model_summaries'].values
