@@ -31,6 +31,7 @@ python3 <filename>
 | fewshot-config.py | Configurable few shot inference |
 | full-tine-tuning.py | Full fine-tuning of FLAN-T5 |
 | peft-fine-tuning.py | PEFT fine-tuning of FLAN-T5 |
+| rlhf.py | Reinforced learning from human feedback |
 
 ## Articles
 
@@ -40,3 +41,9 @@ python3 <filename>
 * Generative AI Project - Part 1: <https://medium.com/@muthuka/generative-ai-project-part-1-12331118b353>
 * Generative AI Project - Part 2: <https://medium.com/@muthuka/generative-ai-project-part-2-ce277f98aa21>
 * Generative AI Project - Part 3: <https://medium.com/@muthuka/generative-ai-project-part-3-7c6793f15326>
+
+To run RLHF, please run the following:
+
+```sh
+pip install git+https://github.com/lvwerra/trl.git@25fa1bd
+```
