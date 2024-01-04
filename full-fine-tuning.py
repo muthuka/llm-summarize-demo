@@ -6,15 +6,34 @@ import evaluate
 import pandas as pd
 import numpy as np
 
+# Check PyTorch has access to MPS (Metal Performance Shader, Apple's GPU architecture)
+print(
+    f"Is MPS (Metal Performance Shader) built? {torch.backends.mps.is_built()}")
+print(f"Is MPS available? {torch.backends.mps.is_available()}")
+
+# Set the device
+device = "cpu"
+
+if torch.backends.mps.is_available():
+    # Initialize the device
+    device = "mps"
+elif torch.cuda.is_available():
+    # Initialize the device
+    device = "cuda"
+
+print(f"Using device: {device}")
+
 # Load the dataset
 huggingface_dataset_name = "knkarthick/dialogsum"
 dataset = load_dataset(huggingface_dataset_name)
 # dataset
 
 # Load the model and tokenizer
-model_name='google/flan-t5-base'
-original_model = AutoModelForSeq2SeqLM.from_pretrained(model_name, torch_dtype=torch.bfloat16)
+model_name = 'google/flan-t5-base'
+original_model = AutoModelForSeq2SeqLM.from_pretrained(
+    model_name, torch_dtype=torch.float32).to(device)  # If not using mac, use bfloat16
 tokenizer = AutoTokenizer.from_pretrained(model_name)
+
 
 def print_number_of_trainable_model_parameters(model):
     trainable_model_params = 0
@@ -24,6 +43,7 @@ def print_number_of_trainable_model_parameters(model):
         if param.requires_grad:
             trainable_model_params += param.numel()
     return f"trainable model parameters: {trainable_model_params}\nall model parameters: {all_model_params}\npercentage of trainable model parameters: {100 * trainable_model_params / all_model_params:.2f}%"
+
 
 print(print_number_of_trainable_model_parameters(original_model))
 
@@ -41,12 +61,12 @@ Summarize the following conversation.
 Summary:
 """
 
-inputs = tokenizer(prompt, return_tensors='pt')
+inputs = tokenizer(prompt, return_tensors='pt').to(device)
 output = tokenizer.decode(
     original_model.generate(
-        inputs["input_ids"], 
+        inputs["input_ids"],
         max_new_tokens=200,
-    )[0], 
+    )[0],
     skip_special_tokens=True
 )
 
@@ -62,19 +82,25 @@ print(f'MODEL GENERATION - ZERO SHOT:\n{output}')
 def tokenize_function(example):
     start_prompt = 'Summarize the following conversation.\n\n'
     end_prompt = '\n\nSummary: '
-    prompt = [start_prompt + dialogue + end_prompt for dialogue in example["dialogue"]]
-    example['input_ids'] = tokenizer(prompt, padding="max_length", truncation=True, return_tensors="pt").input_ids
-    example['labels'] = tokenizer(example["summary"], padding="max_length", truncation=True, return_tensors="pt").input_ids
-    
+    prompt = [start_prompt + dialogue +
+              end_prompt for dialogue in example["dialogue"]]
+    example['input_ids'] = tokenizer(
+        prompt, padding="max_length", truncation=True, return_tensors="pt").input_ids
+    example['labels'] = tokenizer(
+        example["summary"], padding="max_length", truncation=True, return_tensors="pt").input_ids
+
     return example
+
 
 # The dataset actually contains 3 diff splits: train, validation, test.
 # The tokenize_function code is handling all data across all splits in batches.
 tokenized_datasets = dataset.map(tokenize_function, batched=True)
-tokenized_datasets = tokenized_datasets.remove_columns(['id', 'topic', 'dialogue', 'summary',])
+tokenized_datasets = tokenized_datasets.remove_columns(
+    ['id', 'topic', 'dialogue', 'summary',])
 
 # To optimize, we will load a subset of the data
-tokenized_datasets = tokenized_datasets.filter(lambda example, index: index % 100 == 0, with_indices=True)
+tokenized_datasets = tokenized_datasets.filter(
+    lambda example, index: index % 100 == 0, with_indices=True)
 
 print(f"Shapes of the datasets:")
 print(f"Training: {tokenized_datasets['train'].shape}")
@@ -101,7 +127,7 @@ trainer = Trainer(
     eval_dataset=tokenized_datasets['validation']
 )
 
-# Uncomment below when you have a powerful GPU in a server environment. 
+# Uncomment below when you have a powerful GPU in a server environment.
 # Otherwise, it will take days or may not even complete on a small laptop.
 trainer.train()
 
@@ -118,13 +144,21 @@ Summarize the following conversation.
 Summary:
 """
 
-input_ids = tokenizer(prompt, return_tensors="pt").input_ids
+input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
 
-original_model_outputs = original_model.generate(input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200, num_beams=1))
-original_model_text_output = tokenizer.decode(original_model_outputs[0], skip_special_tokens=True)
+original_model_outputs = original_model.generate(
+    input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200, num_beams=1))
+original_model_text_output = tokenizer.decode(
+    original_model_outputs[0], skip_special_tokens=True)
 
-instruct_model_outputs = instruct_model.generate(input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200, num_beams=1))
-instruct_model_text_output = tokenizer.decode(instruct_model_outputs[0], skip_special_tokens=True)
+# Load instruct model
+instruct_model = AutoModelForSeq2SeqLM.from_pretrained(
+    "./flan-dialogue-summary-checkpoint", torch_dtype=torch.float32).to(device)  # If not using mac, use bfloat16
+
+instruct_model_outputs = instruct_model.generate(
+    input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200, num_beams=1))
+instruct_model_text_output = tokenizer.decode(
+    instruct_model_outputs[0], skip_special_tokens=True)
 
 print(dash_line)
 print(f'BASELINE HUMAN SUMMARY:\n{human_baseline_summary}')
@@ -148,19 +182,25 @@ Summarize the following conversation.
 {dialogue}
 
 Summary: """
-    input_ids = tokenizer(prompt, return_tensors="pt").input_ids
+    input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
 
-    original_model_outputs = original_model.generate(input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200))
-    original_model_text_output = tokenizer.decode(original_model_outputs[0], skip_special_tokens=True)
+    original_model_outputs = original_model.generate(
+        input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200))
+    original_model_text_output = tokenizer.decode(
+        original_model_outputs[0], skip_special_tokens=True)
     original_model_summaries.append(original_model_text_output)
 
-    instruct_model_outputs = instruct_model.generate(input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200))
-    instruct_model_text_output = tokenizer.decode(instruct_model_outputs[0], skip_special_tokens=True)
+    instruct_model_outputs = instruct_model.generate(
+        input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200))
+    instruct_model_text_output = tokenizer.decode(
+        instruct_model_outputs[0], skip_special_tokens=True)
     instruct_model_summaries.append(instruct_model_text_output)
-    
-zipped_summaries = list(zip(human_baseline_summaries, original_model_summaries, instruct_model_summaries))
- 
-df = pd.DataFrame(zipped_summaries, columns = ['human_baseline_summaries', 'original_model_summaries', 'instruct_model_summaries'])
+
+zipped_summaries = list(zip(human_baseline_summaries,
+                        original_model_summaries, instruct_model_summaries))
+
+df = pd.DataFrame(zipped_summaries, columns=[
+                  'human_baseline_summaries', 'original_model_summaries', 'instruct_model_summaries'])
 df
 
 original_model_results = rouge.compute(
@@ -182,10 +222,10 @@ print(original_model_results)
 print('INSTRUCT MODEL:')
 print(instruct_model_results)
 
-# The file `data/dialogue-summary-training-results.csv` contains a pre-populated list of all model results 
+# The file `data/dialogue-summary-training-results.csv` contains a pre-populated list of all model results
 # which you can use to evaluate on a larger section of data. Let's do that for each of the models:
 
-results = pd.read_csv("data/dialogue-summary-training-results.csv")
+results = pd.read_csv("data/ds-training-results.csv")
 
 human_baseline_summaries = results['human_baseline_summaries'].values
 original_model_summaries = results['original_model_summaries'].values
@@ -212,6 +252,7 @@ print(instruct_model_results)
 
 print("Absolute percentage improvement of INSTRUCT MODEL over ORIGINAL MODEL")
 
-improvement = (np.array(list(instruct_model_results.values())) - np.array(list(original_model_results.values())))
+improvement = (np.array(list(instruct_model_results.values())) -
+               np.array(list(original_model_results.values())))
 for key, value in zip(instruct_model_results.keys(), improvement):
     print(f'{key}: {value*100:.2f}%')

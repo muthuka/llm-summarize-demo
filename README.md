@@ -29,7 +29,7 @@ python3 <filename>
 | oneshot.py | One shot inference using "Dialogue:" |
 | fewshot.py | Few shots inference using "Dialogue:" |
 | fewshot-config.py | Configurable few shot inference |
-| full-tine-tuning.py | Full fine-tuning of FLAN-T5 |
+| full-fine-tuning.py | Full fine-tuning of FLAN-T5 |
 | peft-fine-tuning.py | PEFT fine-tuning of FLAN-T5 |
 | rlhf.py | Reinforced learning from human feedback |
 
