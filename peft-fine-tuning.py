@@ -8,6 +8,23 @@ import pandas as pd
 import numpy as np
 import datetime
 
+# Check PyTorch has access to MPS (Metal Performance Shader, Apple's GPU architecture)
+print(
+    f"Is MPS (Metal Performance Shader) built? {torch.backends.mps.is_built()}")
+print(f"Is MPS available? {torch.backends.mps.is_available()}")
+
+# Set the device
+device = "cpu"
+
+if torch.backends.mps.is_available():
+    # Initialize the device
+    device = "mps"
+elif torch.cuda.is_available():
+    # Initialize the device
+    device = "cuda"
+
+print(f"Using device: {device}")
+
 # Common things
 dash_line = '-'.join('' for x in range(100))
 equal_line = '='.join('' for x in range(100))
@@ -29,9 +46,9 @@ def tokenize_function(example):
     prompt = [start_prompt + dialogue +
               end_prompt for dialogue in example["dialogue"]]
     example['input_ids'] = tokenizer(
-        prompt, padding="max_length", truncation=True, return_tensors="pt").input_ids
+        prompt, padding="max_length", truncation=True, return_tensors="pt").input_ids.to(device)
     example['labels'] = tokenizer(
-        example["summary"], padding="max_length", truncation=True, return_tensors="pt").input_ids
+        example["summary"], padding="max_length", truncation=True, return_tensors="pt").input_ids.to(device)
 
     return example
 
@@ -47,7 +64,7 @@ print("\nLoading model and tokenizer...")
 print(equal_line)
 model_name = 'google/flan-t5-base'
 original_model = AutoModelForSeq2SeqLM.from_pretrained(
-    model_name, torch_dtype=torch.bfloat16)
+    model_name, torch_dtype=torch.float32).to(device)  # If not using mac, use bfloat16
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 
 print("Number of trainable model parameters in original model:")
@@ -68,7 +85,7 @@ Summarize the following conversation.
 Summary:
 """
 
-inputs = tokenizer(prompt, return_tensors='pt')
+inputs = tokenizer(prompt, return_tensors='pt').to(device)
 output = tokenizer.decode(
     original_model.generate(
         inputs["input_ids"],
@@ -176,7 +193,7 @@ Summarize the following conversation.
 
 Summary: """
 
-input_ids = tokenizer(prompt, return_tensors="pt").input_ids
+input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
 
 original_model_outputs = original_model.generate(
     input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200, num_beams=1))
@@ -209,7 +226,7 @@ Summarize the following conversation.
 Summary: """
 
     print(f"Generating summary for row {idx}...")
-    input_ids = tokenizer(prompt, return_tensors="pt").input_ids
+    input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
     human_baseline_text_output = human_baseline_summaries[idx]
 
     original_model_outputs = original_model.generate(
