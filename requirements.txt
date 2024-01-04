@@ -1,8 +1,8 @@
-torch==2.0.1
-torchdata==0.6.1
-transformers==4.27.2
-datasets==2.11.0
-evaluate==0.4.0
-rouge_score==0.1.2
-loralib==0.1.1
-peft==0.3.0
+torch
+torchdata
+transformers
+datasets
+evaluate
+rouge_score
+loralib
+peft
