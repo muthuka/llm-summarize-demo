@@ -1,26 +1,14 @@
 from datasets import load_dataset
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, GenerationConfig, TrainingArguments, Trainer
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+from transformers import GenerationConfig, TrainingArguments, Trainer
 import torch
 import time
 import evaluate
 import pandas as pd
 import numpy as np
 
-# Check PyTorch has access to MPS (Metal Performance Shader, Apple's GPU architecture)
-print(
-    f"Is MPS (Metal Performance Shader) built? {torch.backends.mps.is_built()}")
-print(f"Is MPS available? {torch.backends.mps.is_available()}")
-
-# Set the device
-device = "cpu"
-
-if torch.backends.mps.is_available():
-    # Initialize the device
-    device = "mps"
-elif torch.cuda.is_available():
-    # Initialize the device
-    device = "cuda"
-
+# Check if MPS is available and set the device
+device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 print(f"Using device: {device}")
 
 # Load the dataset
@@ -31,8 +19,14 @@ dataset = load_dataset(huggingface_dataset_name)
 # Load the model and tokenizer
 model_name = 'google/flan-t5-base'
 original_model = AutoModelForSeq2SeqLM.from_pretrained(
-    model_name, torch_dtype=torch.float32).to(device)  # If not using mac, use bfloat16
-tokenizer = AutoTokenizer.from_pretrained(model_name)
+    # If not using mac, use bfloat16
+    model_name, torch_dtype=torch.float32).to(device)
+
+# Move the model to the correct device
+original_model.to(device)
+
+tokenizer = AutoTokenizer.from_pretrained(
+    model_name, clean_up_tokenization_spaces=True)
 
 
 def print_number_of_trainable_model_parameters(model):
@@ -42,7 +36,12 @@ def print_number_of_trainable_model_parameters(model):
         all_model_params += param.numel()
         if param.requires_grad:
             trainable_model_params += param.numel()
-    return f"trainable model parameters: {trainable_model_params}\nall model parameters: {all_model_params}\npercentage of trainable model parameters: {100 * trainable_model_params / all_model_params:.2f}%"
+        mls = f"""trainable model parameters: {trainable_model_params}\n
+        all model parameters: {all_model_params}\n
+        percentage of trainable model parameters:
+            {100 * trainable_model_params / all_model_params:.2f}%
+        """
+    return mls
 
 
 print(print_number_of_trainable_model_parameters(original_model))
@@ -84,10 +83,16 @@ def tokenize_function(example):
     end_prompt = '\n\nSummary: '
     prompt = [start_prompt + dialogue +
               end_prompt for dialogue in example["dialogue"]]
-    example['input_ids'] = tokenizer(
-        prompt, padding="max_length", truncation=True, return_tensors="pt").input_ids
-    example['labels'] = tokenizer(
-        example["summary"], padding="max_length", truncation=True, return_tensors="pt").input_ids
+
+    op1 = tokenizer(
+        prompt, padding="max_length",
+        truncation=True, return_tensors="pt").to(device)
+    example['input_ids'] = op1.input_ids
+
+    op2 = tokenizer(
+        example["summary"], padding="max_length",
+        truncation=True, return_tensors="pt").to(device)
+    example['labels'] = op2.input_ids
 
     return example
 
@@ -102,7 +107,7 @@ tokenized_datasets = tokenized_datasets.remove_columns(
 tokenized_datasets = tokenized_datasets.filter(
     lambda example, index: index % 100 == 0, with_indices=True)
 
-print(f"Shapes of the datasets:")
+print("Shapes of the datasets:\n")
 print(f"Training: {tokenized_datasets['train'].shape}")
 print(f"Validation: {tokenized_datasets['validation'].shape}")
 print(f"Test: {tokenized_datasets['test'].shape}")
@@ -147,16 +152,19 @@ Summary:
 input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
 
 original_model_outputs = original_model.generate(
-    input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200, num_beams=1))
+    input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200,
+                                                            num_beams=1))
 original_model_text_output = tokenizer.decode(
     original_model_outputs[0], skip_special_tokens=True)
 
 # Load instruct model
 instruct_model = AutoModelForSeq2SeqLM.from_pretrained(
-    "./flan-dialogue-summary-checkpoint", torch_dtype=torch.float32).to(device)  # If not using mac, use bfloat16
+    # If not using mac, use bfloat16
+    "./flan-dialogue-summary-checkpoint", torch_dtype=torch.float32).to(device)
 
 instruct_model_outputs = instruct_model.generate(
-    input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200, num_beams=1))
+    input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200,
+                                                            num_beams=1))
 instruct_model_text_output = tokenizer.decode(
     instruct_model_outputs[0], skip_special_tokens=True)
 
@@ -185,13 +193,15 @@ Summary: """
     input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
 
     original_model_outputs = original_model.generate(
-        input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200))
+        input_ids=input_ids, generation_config=GenerationConfig(
+            max_new_tokens=200))
     original_model_text_output = tokenizer.decode(
         original_model_outputs[0], skip_special_tokens=True)
     original_model_summaries.append(original_model_text_output)
 
     instruct_model_outputs = instruct_model.generate(
-        input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200))
+        input_ids=input_ids, generation_config=GenerationConfig(
+            max_new_tokens=200))
     instruct_model_text_output = tokenizer.decode(
         instruct_model_outputs[0], skip_special_tokens=True)
     instruct_model_summaries.append(instruct_model_text_output)
@@ -200,7 +210,8 @@ zipped_summaries = list(zip(human_baseline_summaries,
                         original_model_summaries, instruct_model_summaries))
 
 df = pd.DataFrame(zipped_summaries, columns=[
-                  'human_baseline_summaries', 'original_model_summaries', 'instruct_model_summaries'])
+    'human_baseline_summaries', 'original_model_summaries',
+    'instruct_model_summaries'])
 df
 
 original_model_results = rouge.compute(
@@ -222,8 +233,10 @@ print(original_model_results)
 print('INSTRUCT MODEL:')
 print(instruct_model_results)
 
-# The file `data/dialogue-summary-training-results.csv` contains a pre-populated list of all model results
-# which you can use to evaluate on a larger section of data. Let's do that for each of the models:
+# The file `data/dialogue-summary-training-results.csv` contains
+# a pre-populated list of all model results
+# which you can use to evaluate on a larger section of data.
+# Let's do that for each of the models:
 
 results = pd.read_csv("data/ds-training-results.csv")
 

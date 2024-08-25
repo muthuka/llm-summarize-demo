@@ -1,3 +1,16 @@
+from datasets import load_dataset
+import torch
+from transformers import AutoTokenizer
+from tqdm import tqdm
+from transformers import GenerationConfig
+import numpy as np
+
+# Check if MPS is available and set the device
+# device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+device = "cpu"
+print(f"Using device: {device}")
+
+
 def collator(data):
     return dict((key, [d[key] for d in data]) for key in data[0])
 
@@ -16,18 +29,25 @@ def build_dataset(model_name,
     - input_max_text_length (int): Maximum length of the dialogues.
 
     Returns:
-    - dataset_splits (datasets.dataset_dict.DatasetDict): Preprocessed dataset containing train and test parts.
+    - dataset_splits (datasets.dataset_dict.DatasetDict): 
+        Preprocessed dataset containing train and test parts.
     """
 
     # load dataset (only "train" part will be enough for this lab).
     dataset = load_dataset(dataset_name, split="train")
 
-    # Filter the dialogues of length between input_min_text_length and input_max_text_length characters.
-    dataset = dataset.filter(lambda x: len(x["dialogue"]) > input_min_text_length and len(
+    # Filter the dialogues of length between input_min_text_length
+    # and input_max_text_length characters.
+    dataset = dataset.filter(lambda x: len(x["dialogue"]) >
+                             input_min_text_length and len(
         x["dialogue"]) <= input_max_text_length, batched=False)
 
-    # Prepare tokenizer. Setting device_map="auto" allows to switch between GPU and CPU automatically.
-    tokenizer = AutoTokenizer.from_pretrained(model_name, device_map="auto")
+    # Prepare tokenizer. Setting device_map="auto" allows to switch
+    # between GPU and CPU automatically.
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_name,
+        device_map="auto",
+        clean_up_tokenization_spaces=True)
 
     def tokenize(sample):
 
@@ -41,7 +61,8 @@ Summary:
 """
         sample["input_ids"] = tokenizer.encode(prompt)
 
-        # This must be called "query", which is a requirement of our PPO library.
+        # This must be called "query", which is a
+        # requirement of our PPO library.
         sample["query"] = tokenizer.decode(sample["input_ids"])
         return sample
 
@@ -63,7 +84,10 @@ def print_model_params(model):
         all_model_params += param.numel()
         if param.requires_grad:
             trainable_model_params += param.numel()
-    return f"\ntrainable model parameters: {trainable_model_params}\nall model parameters: {all_model_params}\npercentage of trainable model parameters: {100 * trainable_model_params / all_model_params:.2f}%"
+    return f"""\ntrainable model parameters: {
+        trainable_model_params}\nall model parameters: {all_model_params}\n
+        percentage of trainable model parameters: {
+            100 * trainable_model_params / all_model_params:.2f}%"""
 
 
 def evaluate_toxicity(model,
@@ -76,7 +100,7 @@ def evaluate_toxicity(model,
 
     Parameters:
     - model (trl model): Model to be evaluated.
-    - toxicity_evaluator (evaluate_modules toxicity metrics): Toxicity evaluator.
+    - toxicity_evaluator (evaluate_modules toxicity metrics)
     - tokenizer (transformers tokenizer): Tokenizer to be used.
     - dataset (dataset): Input dataset for the evaluation.
     - num_samples (int): Maximum number of samples for the evaluation.
@@ -90,7 +114,7 @@ def evaluate_toxicity(model,
     max_new_tokens = 100
 
     toxicities = []
-    input_texts = []
+    # input_texts = []
     for i, sample in tqdm(enumerate(dataset)):
         input_text = sample["query"]
 
@@ -100,13 +124,13 @@ def evaluate_toxicity(model,
         input_ids = tokenizer(
             input_text, return_tensors="pt", padding=True).input_ids
 
-        generation_config = GenerationConfig(max_new_tokens=max_new_tokens,
-                                             top_k=0.0,
-                                             top_p=1.0,
-                                             do_sample=True)
+        gen_conf = GenerationConfig(max_new_tokens=max_new_tokens,
+                                    top_k=0.0,
+                                    top_p=1.0,
+                                    do_sample=True)
 
         response_token_ids = model.generate(input_ids=input_ids,
-                                            generation_config=generation_config)
+                                            generation_config=gen_conf)
 
         generated_text = tokenizer.decode(
             response_token_ids[0], skip_special_tokens=True)

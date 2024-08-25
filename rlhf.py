@@ -1,21 +1,25 @@
-from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification, AutoModelForSeq2SeqLM, GenerationConfig
+from tqdm import tqdm
+from transformers import pipeline, AutoTokenizer
+from transformers import AutoModelForSequenceClassification
+from transformers import AutoModelForSeq2SeqLM
 from datasets import load_dataset
-from peft import PeftModel, PeftConfig, LoraConfig, TaskType
-
+from peft import PeftModel, LoraConfig, TaskType
 # trl: Transformer Reinforcement Learning library
 from trl import PPOTrainer, PPOConfig, AutoModelForSeq2SeqLMWithValueHead
 from trl import create_reference_model
 from trl.core import LengthSampler
-from common import build_dataset, print_model_params, evaluate_toxicity, collator
-
+from common import build_dataset, print_model_params
+from common import evaluate_toxicity, collator
 import torch
 import evaluate
-
-import numpy as np
 import pandas as pd
 
+# Check if MPS is available and set the device
+# device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+device = "cpu"
+print(f"Using device: {device}")
+
 # tqdm library makes the loops show a smart progress meter.
-from tqdm import tqdm
 tqdm.pandas()
 
 # Load the dataset
@@ -29,32 +33,46 @@ dataset = build_dataset(model_name=model_name,
 
 
 lora_config = LoraConfig(r=32,  # Rank
-                         lora_alpha=32, target_modules=["q", "v"], lora_dropout=0.05, bias="none",
+                         lora_alpha=32, target_modules=["q", "v"],
+                         lora_dropout=0.05, bias="none",
                          task_type=TaskType.SEQ_2_SEQ_LM  # FLAN-T5
                          )
 
 model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
+
+# Move the model to the correct device
+model.to(device)
+
 peft_model = PeftModel.from_pretrained(
-    model, './peft/', lora_config=lora_config, torch_dtype=torch.bfloat16, device_map="auto", is_trainable=True)
+    model, './peft/', lora_config=lora_config, torch_dtype=torch.bfloat16,
+    device_map="auto", is_trainable=True)
 print(
-    f'PEFT model parameters to be updated:\n{print_model_params(peft_model)}\n')
+    f'PEFT model params to be updated:\n{print_model_params(peft_model)}\n')
+
+peft_model.to(device)
 
 ppo_model = AutoModelForSeq2SeqLMWithValueHead.from_pretrained(
     peft_model, torch_dtype=torch.bfloat16, is_trainable=True)
+ppo_model.to(device)
 print(
-    f'PPO model parameters to be updated (ValueHead + 769 params):\n{print_model_params(ppo_model)}\n')
+    f'PPO model parameters to be updated (ValueHead + 769 params):\n{
+        print_model_params(ppo_model)}\n')
 print(ppo_model.v_head)
 
 ref_model = create_reference_model(ppo_model)
 print(
-    f'Reference model parameters to be updated:\n{print_model_params(ref_model)}\n')
+    f'Reference model parameters to be updated:\n{
+        print_model_params(ref_model)}\n')
+# ref_model.to(device)
 
 # Prepare Reward Model
 toxicity_model_name = "facebook/roberta-hate-speech-dynabench-r4-target"
-toxicity_tokenizer = AutoTokenizer.from_pretrained(toxicity_model_name)
+toxicity_tokenizer = AutoTokenizer.from_pretrained(
+    toxicity_model_name, clean_up_tokenization_spaces=True)
 toxicity_model = AutoModelForSequenceClassification.from_pretrained(
     toxicity_model_name)
 print(toxicity_model.config.id2label)
+toxicity_model.to("cpu")
 
 non_toxic_text = "#Person 1# tells Tommy that he didn't like the movie."
 toxicity_input_ids = toxicity_tokenizer(
@@ -71,7 +89,9 @@ not_hate_index = 0
 nothate_reward = (logits[:, not_hate_index]).tolist()
 print(f'reward (high): {nothate_reward}')
 
-toxic_text = "#Person 1# tells Tommy that the movie was terrible, dumb and stupid."
+toxic_text = """#Person 1# tells Tommy that the movie was terrible,
+dumb and stupid."""
+
 toxicity_input_ids = toxicity_tokenizer(
     toxic_text, return_tensors="pt").input_ids
 logits = toxicity_model(toxicity_input_ids).logits
@@ -84,8 +104,6 @@ print(f'probabilities [not hate, hate]: {probabilities}')
 # Get the logits for "not hate" - this is the reward!
 nothate_reward = (logits[:, not_hate_index]).tolist()
 print(f'reward (low): {nothate_reward}')
-
-device = 0 if torch.cuda.is_available() else "cpu"
 
 sentiment_pipe = pipeline("sentiment-analysis",
                           model=toxicity_model_name,
@@ -131,14 +149,18 @@ print("\nToxicity score for toxic text:")
 print(toxicity_score["toxicity"])
 
 
-tokenizer = AutoTokenizer.from_pretrained(model_name, device_map="auto")
-mean_before_detoxification, std_before_detoxification = evaluate_toxicity(model=ref_model,
-                                                                          toxicity_evaluator=toxicity_evaluator,
-                                                                          tokenizer=tokenizer,
-                                                                          dataset=dataset["test"],
-                                                                          num_samples=10)
+tokenizer = AutoTokenizer.from_pretrained(
+    model_name, device_map="auto", clean_up_tokenization_spaces=True)
+
+mean_before_detoxification, std_before_detoxification = evaluate_toxicity(
+    model=ref_model,
+    toxicity_evaluator=toxicity_evaluator,
+    tokenizer=tokenizer,
+    dataset=dataset["test"],
+    num_samples=10)
 print(
-    f'toxicity [mean, std] before detox: [{mean_before_detoxification}, {std_before_detoxification}]')
+    f'toxicity [mean, std] before detox: [{mean_before_detoxification}, {
+        std_before_detoxification}]')
 
 # Detoxify
 test_data = [{"key1": "value1", "key2": "value2", "key3": "value3"}]
@@ -211,7 +233,8 @@ for step, batch in tqdm(enumerate(ppo_trainer.dataloader)):
                             r in zip(batch["query"], batch["response"])]
     rewards = sentiment_pipe(query_response_pairs, **reward_kwargs)
 
-    # You use the `nothate` item because this is the score for the positive `nothate` class.
+    # You use the `nothate` item because this is the score for the
+    # positive `nothate` class.
     reward_tensors = [torch.tensor(
         reward[not_hate_index]["score"]) for reward in rewards]
 
@@ -225,20 +248,23 @@ for step, batch in tqdm(enumerate(ppo_trainer.dataloader)):
     print('-'.join('' for x in range(100)))
 
 
-mean_after_detoxification, std_after_detoxification = evaluate_toxicity(model=ppo_model,
-                                                                        toxicity_evaluator=toxicity_evaluator,
-                                                                        tokenizer=tokenizer,
-                                                                        dataset=dataset["test"],
-                                                                        num_samples=10)
+mean_after_detoxification, std_after_detoxification = evaluate_toxicity(
+    model=ppo_model,
+    toxicity_evaluator=toxicity_evaluator,
+    tokenizer=tokenizer,
+    dataset=dataset["test"],
+    num_samples=10)
 print(
-    f'toxicity [mean, std] after detox: [{mean_after_detoxification}, {std_after_detoxification}]')
+    f"""toxicity [mean, std] after detox: [{mean_after_detoxification},
+    {std_after_detoxification}]
+    """)
 
 mean_improvement = (mean_before_detoxification -
                     mean_after_detoxification) / mean_before_detoxification
 std_improvement = (std_before_detoxification -
                    std_after_detoxification) / std_before_detoxification
 
-print(f'Percentage improvement of toxicity score after detoxification:')
+print('Percentage improvement of toxicity score after detoxification:')
 print(f'mean: {mean_improvement*100:.2f}%')
 print(f'std: {std_improvement*100:.2f}%')
 
@@ -281,13 +307,15 @@ compare_results["response_after"] = [tokenizer.decode(
 
 # Sentiment analysis of query/response pairs before/after.
 texts_before = [
-    d + s for d, s in zip(compare_results["query"], compare_results["response_before"])]
+    d + s for d, s in zip(compare_results["query"],
+                          compare_results["response_before"])]
 rewards_before = sentiment_pipe(texts_before, **reward_kwargs)
 compare_results["reward_before"] = [reward[not_hate_index]["score"]
                                     for reward in rewards_before]
 
 texts_after = [
-    d + s for d, s in zip(compare_results["query"], compare_results["response_after"])]
+    d + s for d, s in zip(compare_results["query"],
+                          compare_results["response_after"])]
 rewards_after = sentiment_pipe(texts_after, **reward_kwargs)
 compare_results["reward_after"] = [reward[not_hate_index]["score"]
                                    for reward in rewards_after]

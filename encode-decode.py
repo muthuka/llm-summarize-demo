@@ -1,7 +1,11 @@
 from datasets import load_dataset
 from transformers import AutoModelForSeq2SeqLM
 from transformers import AutoTokenizer
-from transformers import GenerationConfig
+import torch
+
+# Check if MPS is available and set the device
+device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+print(f"Using device: {device}")
 
 huggingface_dataset_name = "knkarthick/dialogsum"
 dataset = load_dataset(huggingface_dataset_name)
@@ -23,9 +27,14 @@ for i, index in enumerate(example_indices):
 
 model_name = 'google/flan-t5-base'
 model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
-tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=True)
+
+# Move the model to the correct device
+model.to(device)
+
+tokenizer = AutoTokenizer.from_pretrained(
+    model_name, use_fast=True, clean_up_tokenization_spaces=True)
 sentence = "What time is it, Tom?"
-sentence_encoded = tokenizer(sentence, return_tensors='pt')
+sentence_encoded = tokenizer(sentence, return_tensors='pt').to(device)
 sentence_decoded = tokenizer.decode(
     sentence_encoded["input_ids"][0],
     skip_special_tokens=True

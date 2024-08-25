@@ -6,3 +6,4 @@ evaluate
 rouge_score
 loralib
 peft
+tqdm

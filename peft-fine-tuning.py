@@ -1,6 +1,7 @@
 from peft import LoraConfig, get_peft_model, TaskType
 from datasets import load_dataset
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, GenerationConfig, TrainingArguments, Trainer
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+from transformers import GenerationConfig, TrainingArguments, Trainer
 import torch
 import time
 import evaluate
@@ -8,21 +9,8 @@ import pandas as pd
 import numpy as np
 import datetime
 
-# Check PyTorch has access to MPS (Metal Performance Shader, Apple's GPU architecture)
-print(
-    f"Is MPS (Metal Performance Shader) built? {torch.backends.mps.is_built()}")
-print(f"Is MPS available? {torch.backends.mps.is_available()}")
-
-# Set the device
-device = "cpu"
-
-if torch.backends.mps.is_available():
-    # Initialize the device
-    device = "mps"
-elif torch.cuda.is_available():
-    # Initialize the device
-    device = "cuda"
-
+# Check if MPS is available and set the device
+device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 print(f"Using device: {device}")
 
 # Common things
@@ -37,7 +25,11 @@ def print_number_of_trainable_model_parameters(model):
         all_model_params += param.numel()
         if param.requires_grad:
             trainable_model_params += param.numel()
-    return f"=> {trainable_model_params} ({100 * trainable_model_params / all_model_params:.2f}%) of {all_model_params}"
+    return f"""=>
+            {trainable_model_params}
+            ({100 * trainable_model_params / all_model_params:.2f}%)
+            of {all_model_params}
+    """
 
 
 def tokenize_function(example):
@@ -46,9 +38,11 @@ def tokenize_function(example):
     prompt = [start_prompt + dialogue +
               end_prompt for dialogue in example["dialogue"]]
     example['input_ids'] = tokenizer(
-        prompt, padding="max_length", truncation=True, return_tensors="pt").input_ids.to(device)
+        prompt, padding="max_length",
+        truncation=True, return_tensors="pt").input_ids.to(device)
     example['labels'] = tokenizer(
-        example["summary"], padding="max_length", truncation=True, return_tensors="pt").input_ids.to(device)
+        example["summary"], padding="max_length",
+        truncation=True, return_tensors="pt").input_ids.to(device)
 
     return example
 
@@ -64,8 +58,10 @@ print("\nLoading model and tokenizer...")
 print(equal_line)
 model_name = 'google/flan-t5-base'
 original_model = AutoModelForSeq2SeqLM.from_pretrained(
-    model_name, torch_dtype=torch.float32).to(device)  # If not using mac, use bfloat16
-tokenizer = AutoTokenizer.from_pretrained(model_name)
+    # If not using mac, use bfloat16
+    model_name, torch_dtype=torch.float32).to(device)
+tokenizer = AutoTokenizer.from_pretrained(
+    model_name, clean_up_tokenization_spaces=True)
 
 print("Number of trainable model parameters in original model:")
 print(print_number_of_trainable_model_parameters(original_model))
@@ -110,7 +106,7 @@ tokenized_datasets = tokenized_datasets.remove_columns(
 tokenized_datasets = tokenized_datasets.filter(
     lambda example, index: index % 100 == 0, with_indices=True)
 
-print(f"Shapes of the datasets:")
+print("Shapes of the datasets:")
 print(f"Training: {tokenized_datasets['train'].shape}")
 print(f"Validation: {tokenized_datasets['validation'].shape}")
 print(f"Test: {tokenized_datasets['test'].shape}")
@@ -121,12 +117,13 @@ print("\nFine-tuning the model with PEFT...")
 print(equal_line)
 
 now = datetime.datetime.now()
-print(f"Fine-tuning start tine : ")
+print("Fine-tuning start tine : ")
 print(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
 # from peft import PeftModel, PeftConfig
 
-# peft_model_base = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base", torch_dtype=torch.bfloat16)
+# peft_model_base = AutoModelForSeq2SeqLM.from_pretrained(
+#                   "google/flan-t5-base", torch_dtype=torch.bfloat16)
 # tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base")
 
 # peft_model = PeftModel.from_pretrained(peft_model_base,
@@ -167,7 +164,8 @@ peft_trainer = Trainer(
     train_dataset=tokenized_datasets["train"],
 )
 
-# PEFT is relatively faster. Based on the model size, you choose to train and save it offline
+# PEFT is relatively faster. Based on the model size, you choose to train
+# and save it offline
 # Otherwise, it will take days or may not even complete on a small laptop.
 peft_trainer.train()
 peft_model_path = "./peft-dialogue-summary-checkpoint-local"
@@ -175,7 +173,7 @@ peft_model_path = "./peft-dialogue-summary-checkpoint-local"
 peft_trainer.model.save_pretrained(peft_model_path)
 tokenizer.save_pretrained(peft_model_path)
 
-print(f"Fine-tuning end tine : ")
+print("Fine-tuning end tine : ")
 print(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
 print(print_number_of_trainable_model_parameters(peft_model))
@@ -196,12 +194,14 @@ Summary: """
 input_ids = tokenizer(prompt, return_tensors="pt").input_ids.to(device)
 
 original_model_outputs = original_model.generate(
-    input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200, num_beams=1))
+    input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200,
+                                                            num_beams=1))
 original_model_text_output = tokenizer.decode(
     original_model_outputs[0], skip_special_tokens=True)
 
 peft_model_outputs = peft_model.generate(
-    input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200, num_beams=1))
+    input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200,
+                                                            num_beams=1))
 peft_model_text_output = tokenizer.decode(
     peft_model_outputs[0], skip_special_tokens=True)
 
@@ -230,12 +230,14 @@ Summary: """
     human_baseline_text_output = human_baseline_summaries[idx]
 
     original_model_outputs = original_model.generate(
-        input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200))
+        input_ids=input_ids, generation_config=GenerationConfig(
+            max_new_tokens=200))
     original_model_text_output = tokenizer.decode(
         original_model_outputs[0], skip_special_tokens=True)
 
     peft_model_outputs = peft_model.generate(
-        input_ids=input_ids, generation_config=GenerationConfig(max_new_tokens=200))
+        input_ids=input_ids, generation_config=GenerationConfig(
+            max_new_tokens=200))
     peft_model_text_output = tokenizer.decode(
         peft_model_outputs[0], skip_special_tokens=True)
 
@@ -243,11 +245,14 @@ Summary: """
     peft_model_summaries.append(peft_model_text_output)
 
 zipped_summaries = list(
-    zip(human_baseline_summaries, original_model_summaries, peft_model_summaries))
+    zip(human_baseline_summaries, original_model_summaries,
+        peft_model_summaries))
 
 print("\nComparing human vs original vs peft model summaries...\n")
 df = pd.DataFrame(zipped_summaries, columns=[
-                  'human_baseline_summaries', 'original_model_summaries', 'peft_model_summaries'])
+                  'human_baseline_summaries',
+                  'original_model_summaries',
+                  'peft_model_summaries'])
 print(df)
 
 
@@ -276,7 +281,7 @@ print('PEFT MODEL:')
 print(peft_model_results)
 
 # check performance on the full test set
-print("\nEvaluating the model quantitatively using ROUGE on the full test set...")
+print("\nEval the model quantitatively using ROUGE on the full test set.")
 print(equal_line)
 results = pd.read_csv("data/ds-training-results.csv")
 

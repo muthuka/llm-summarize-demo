@@ -160,3 +160,5 @@ cython_debug/
 .idea/
 dialogue-summary-training-*
 peft-dialogue-summary-*
+
+.vscode/
