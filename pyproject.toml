@@ -1,0 +1,23 @@
+[tool.poetry]
+name = "llm-summarize-demo"
+version = "0.1.0"
+description = ""
+authors = ["Muthu Arumugam <muthu.kumar@me.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.12"
+torch = "^2.4.1"
+torchdata = "^0.8.0"
+transformers = "^4.44.2"
+datasets = "^3.0.0"
+evaluate = "^0.4.3"
+rouge-score = "^0.1.2"
+loralib = "^0.1.2"
+peft = "^0.12.0"
+tqdm = "^4.66.5"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
